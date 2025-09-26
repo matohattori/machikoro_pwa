@@ -1,370 +1,376 @@
+// ==============================
 // App.tsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+// ==============================
+import React, { useEffect, useState, useRef } from "react";
 
-export default function JengaTimer() {
-  const [numPlayers, setNumPlayers] = useState(2);
-  const [timePerTurn, setTimePerTurn] = useState(10);
-  const [currentPlayer, setCurrentPlayer] = useState(0);
-  const [running, setRunning] = useState(false);
-  const [gameOver, setGameOver] = useState(false);
-  const [started, setStarted] = useState(false);
-  const [flash, setFlash] = useState(false);
-  const deadlineRef = useRef<number | null>(null);
-  const [remainingMs, setRemainingMs] = useState(0);
-  const [playerNames, setPlayerNames] = useState([
-    "Player 1",
-    "Player 2",
-    "Player 3",
-    "Player 4",
-  ]);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const [audioPrimed, setAudioPrimed] = useState(false);
-  const audioLockRef = useRef(false);
-  const lastSecondRef = useRef<number | null>(null);
+// 型定義
+type Facility = string;
+interface SavedState {
+  market: Facility[];
+  pool: Facility[];
+  exhausted: Facility[];
+}
 
-  const ceilSecs = (ms: number) => Math.max(0, Math.ceil(ms / 1000));
-  const nextIdx = (p: number, n: number) => (p + 1) % n;
-  const remainingSec = useMemo(() => ceilSecs(remainingMs), [remainingMs]);
+const DEFAULT_FACILITIES: Facility[] = [
+  "麦畑",
+  "牧場",
+  "森林",
+  "鉱山",
+  "リンゴ園",
+  "花畑",
+  "サンマ漁船",
+  "マグロ漁船",
+  "パン屋",
+  "コンビニ",
+  "チーズ工場",
+  "家具工場",
+  "青果市場",
+  "フラワーショップ",
+  "食品倉庫",
+  "カフェ",
+  "ファミレス",
+  "寿司屋",
+  "ピザ屋",
+  "バーガーショップ",
+  "スタジアム",
+  "テレビ局",
+  "ビジネスセンター",
+  "出版社",
+  "税務署",
+  // 追加分
+  "改装屋",
+  "公園",
+  "ブドウ園",
+  "会員制BAR",
+  "高級フレンチ",
+  "引っ越し屋",
+  "ドリンク工場",
+  "雑貨屋",
+  "ワイナリー",
+  "ITベンチャー",
+  "コーン畑",
+  "貸金業",
+  "清掃業",
+];
 
-  const ensureAudioPrimed = () => {
-    if (audioPrimed) return;
-    try {
-      const AudioCtx =
-        window.AudioContext || (window as any).webkitAudioContext;
-      const ctx = new AudioCtx();
-      audioCtxRef.current = ctx;
-      const silent = ctx.createBuffer(1, 1, ctx.sampleRate);
-      const src = ctx.createBufferSource();
-      src.buffer = silent;
-      src.connect(ctx.destination);
-      src.start();
-      ctx
-        .resume()
-        .then(() => setAudioPrimed(true))
-        .catch(() => {});
-    } catch (_) {}
-  };
+const LS_KEY = "machi_koro_all_facilities_v2";
 
-  const resumeIfNeeded = async () => {
-    const ctx = audioCtxRef.current;
-    if (!ctx) return;
-    if (ctx.state === "suspended") {
-      try {
-        await ctx.resume();
-      } catch (_) {}
+function shuffle<T>(arr: T[]): T[] {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function uniqueTrimmed(list: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of list) {
+    const s = raw.trim();
+    if (!s) continue;
+    if (!seen.has(s)) {
+      seen.add(s);
+      out.push(s);
     }
-  };
+  }
+  return out;
+}
 
-  const playBeep = async () => {
-    const ctx = audioCtxRef.current;
-    if (!ctx) return;
-    await resumeIfNeeded();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(880, ctx.currentTime);
-    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.14);
-  };
-
-  const playExplosion = async () => {
-    const ctx = audioCtxRef.current;
-    if (!ctx) return;
-    if (audioLockRef.current) return;
-    audioLockRef.current = true;
-    setTimeout(() => {
-      audioLockRef.current = false;
-    }, 300);
-    await resumeIfNeeded();
-    const duration = 1.1;
-    const buffer = ctx.createBuffer(
-      1,
-      Math.floor(ctx.sampleRate * duration),
-      ctx.sampleRate
-    );
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < data.length; i++) {
-      data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
-    }
-    const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    const filter = ctx.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.frequency.setValueAtTime(2200, ctx.currentTime);
-    filter.frequency.exponentialRampToValueAtTime(
-      200,
-      ctx.currentTime + duration
-    );
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.001, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.9, ctx.currentTime + 0.03);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
-    src.connect(filter);
-    filter.connect(gain);
-    gain.connect(ctx.destination);
-    src.start();
-  };
-
+export default function App() {
+  const [route, setRoute] = useState<string>(
+    () => location.hash.replace("#", "") || "/"
+  );
   useEffect(() => {
-    const onVisible = () => {
-      resumeIfNeeded();
-    };
-    window.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onVisible);
-    return () => {
-      window.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onVisible);
-    };
+    const onHash = () => setRoute(location.hash.replace("#", "") || "/");
+    if (!location.hash) location.hash = "/";
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  const [allFacilities, setAllFacilities] = useState<Facility[]>(() => {
+    try {
+      const saved = localStorage.getItem(LS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return uniqueTrimmed(parsed.map(String));
+      }
+    } catch {}
+    return DEFAULT_FACILITIES;
+  });
+
+  const [selectedCount, setSelectedCount] = useState<number>(10);
+  const [market, setMarket] = useState<Facility[]>([]);
+  const [pool, setPool] = useState<Facility[]>([]);
+  const [exhausted, setExhausted] = useState<Facility[]>([]);
+  const [message, setMessage] = useState<string>("");
+  const [lastAdded, setLastAdded] = useState<Facility | null>(null);
+  const [mode, setMode] = useState<"random" | "manual">("random");
+  const [manualSelection, setManualSelection] = useState<Facility[]>([]);
+  const [initialized, setInitialized] = useState<boolean>(false);
+
+  const historyRef = useRef<SavedState[]>([]);
+
   useEffect(() => {
-    if (!running || gameOver) return;
-    const tick = () => {
-      const now = performance.now();
-      if (deadlineRef.current == null) return;
-      const left = deadlineRef.current - now;
-      setRemainingMs(Math.max(0, left));
-      const sec = ceilSecs(left);
-      if (sec !== lastSecondRef.current) {
-        lastSecondRef.current = sec;
-        if (sec <= 5 && sec > 0 && audioPrimed) {
-          try {
-            playBeep();
-          } catch (_) {}
-        }
-      }
-      if (left <= 0) {
-        setRunning(false);
-        setGameOver(true);
-        if (navigator.vibrate) {
-          try {
-            navigator.vibrate(800);
-          } catch (_) {}
-        }
-        if (audioPrimed) {
-          try {
-            playExplosion();
-          } catch (_) {}
-        }
-      }
-    };
-    const id = setInterval(tick, 100);
-    tick();
-    return () => clearInterval(id);
-  }, [running, gameOver, audioPrimed]);
+    localStorage.setItem(LS_KEY, JSON.stringify(allFacilities));
+  }, [allFacilities]);
 
-  const triggerFlash = () => {
-    setFlash(true);
-    setTimeout(() => setFlash(false), 150);
-  };
-
-  const startGame = () => {
-    ensureAudioPrimed();
-    setStarted(true);
-    setGameOver(false);
-    setRunning(true);
-    setCurrentPlayer(0);
-    const now = performance.now();
-    deadlineRef.current = now + timePerTurn * 1000;
-    setRemainingMs(timePerTurn * 1000);
-    lastSecondRef.current = timePerTurn;
-  };
-
-  const finishTurn = () => {
-    if (!running || gameOver) return;
-    triggerFlash();
-    if (navigator.vibrate) {
-      try {
-        navigator.vibrate([30, 50, 30]);
-      } catch (_) {}
-    }
-    setCurrentPlayer((p) => {
-      const next = nextIdx(p, numPlayers);
-      const now = performance.now();
-      deadlineRef.current = now + timePerTurn * 1000;
-      setRemainingMs(timePerTurn * 1000);
-      lastSecondRef.current = timePerTurn;
-      return next;
+  const pushHistory = (state: SavedState) => {
+    historyRef.current.push({
+      market: state.market.slice(),
+      pool: state.pool.slice(),
+      exhausted: state.exhausted.slice(),
     });
   };
 
-  const resetAll = () => {
-    setRunning(false);
-    setGameOver(false);
-    setStarted(false);
-    setCurrentPlayer(0);
-    deadlineRef.current = null;
-    setRemainingMs(0);
-    lastSecondRef.current = null;
-  };
-
-  const handleRootClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (
-      (e.target as HTMLElement).closest("#resetButton") ||
-      (e.target as HTMLElement).closest("#startButton")
-    )
+  const initMarket = (count: number = selectedCount) => {
+    setMessage("");
+    const uniq = uniqueTrimmed(allFacilities);
+    if (uniq.length < count) {
+      setMessage(
+        `エラー：全施設 ${uniq.length} 件では選択施設数 ${count} 件を満たせません。`
+      );
       return;
-    ensureAudioPrimed();
-    if (started && running && !gameOver) finishTurn();
+    }
+    if (mode === "manual") {
+      if (manualSelection.length !== count) {
+        setMessage(
+          `エラー：手動選択では ${count} 件ちょうど選んでください。現在 ${manualSelection.length} 件。`
+        );
+        return;
+      }
+      const chosen = manualSelection.slice();
+      const rest = uniq.filter((x) => !chosen.includes(x));
+      pushHistory({ market, pool, exhausted });
+      setMarket(chosen);
+      setPool(shuffle(rest));
+      setExhausted([]);
+      setLastAdded(null);
+    } else {
+      const shuffled = shuffle(uniq);
+      pushHistory({ market, pool, exhausted });
+      setMarket(shuffled.slice(0, count));
+      setPool(shuffled.slice(count));
+      setExhausted([]);
+      setLastAdded(null);
+    }
+    setInitialized(true);
   };
 
-  const resetHoldRef = useRef<{ timer: any; held: boolean }>({
-    timer: null,
-    held: false,
-  });
-  const onResetDown = (e: React.PointerEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    const t = setTimeout(() => {
-      resetHoldRef.current.held = true;
-      resetAll();
-    }, 800);
-    resetHoldRef.current = { timer: t, held: false };
+  const replaceOne = (idx: number) => {
+    setMessage("");
+    setMarket((prevMarket) => {
+      if (idx < 0 || idx >= prevMarket.length) return prevMarket;
+      if (pool.length === 0) {
+        setMessage("未使用プールが空です。これ以上の補充はできません。");
+        return prevMarket;
+      }
+      pushHistory({ market: prevMarket, pool, exhausted });
+      const removed = prevMarket[idx];
+      const pShuffled = shuffle(pool);
+      const next = pShuffled[0];
+      const newPool = pShuffled.slice(1);
+      const newMarket = prevMarket.slice();
+      newMarket[idx] = next;
+      setPool(newPool);
+      setExhausted((ex) => [...ex, removed]);
+      setLastAdded(next);
+      return newMarket;
+    });
   };
-  const onResetUp = (e: React.PointerEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    const { timer, held } = resetHoldRef.current || {};
-    if (timer) clearTimeout(timer);
-    resetHoldRef.current = { timer: null, held: false };
-    if (!held) {
-      if (started && running && !gameOver) finishTurn();
+
+  const restorePrevious = () => {
+    if (historyRef.current.length > 0) {
+      const prev = historyRef.current.pop()!;
+      setMarket(prev.market);
+      setPool(prev.pool);
+      setExhausted(prev.exhausted);
+      setLastAdded(null);
     }
   };
 
-  return (
-    <div
-      className={`min-h-screen flex items-center justify-center p-6 ${
-        flash ? "bg-yellow-100" : "bg-slate-50"
-      } text-slate-900 transition-colors duration-150`}
-      onClick={handleRootClick}
-      onTouchStart={() => {
-        ensureAudioPrimed();
-        resumeIfNeeded();
-      }}
-      onMouseDown={() => {
-        ensureAudioPrimed();
-        resumeIfNeeded();
-      }}
-    >
-      <div className="w-full max-w-xl">
-        <div className="mb-4 text-center">
-          <h1 className="text-2xl font-bold tracking-tight">
-            Jenga Turn Timer
-          </h1>
-        </div>
+  const ManageView: React.FC = () => {
+    const [bulkText, setBulkText] = useState<string>(allFacilities.join("\n"));
+    useEffect(() => setBulkText(allFacilities.join("\n")), [allFacilities]);
+    const applyBulk = () => {
+      const list = uniqueTrimmed(bulkText.split("\n"));
+      if (list.length === 0) {
+        setMessage("エラー：少なくとも1件の施設名が必要です。");
+        return;
+      }
+      setAllFacilities(list);
+      setMessage("全施設リストを更新しました。");
+    };
+    return (
+      <div>
+        <textarea
+          value={bulkText}
+          onChange={(e) => setBulkText(e.target.value)}
+          className="w-full h-64 border"
+        />
+        <button onClick={applyBulk}>更新</button>
+      </div>
+    );
+  };
 
-        {!started && (
-          <>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-              <div className="bg-white rounded-2xl shadow p-4">
-                <label className="block text-sm font-medium mb-2">
-                  プレイヤー人数
-                </label>
-                <select
-                  className="w-full rounded-xl border px-3 py-3 text-lg"
-                  value={numPlayers}
-                  onChange={(e) => setNumPlayers(Number(e.target.value))}
-                >
-                  {[2, 3, 4].map((n) => (
-                    <option key={n} value={n}>
-                      {n} 人
-                    </option>
-                  ))}
-                </select>
-              </div>
+  const PlayView: React.FC = () => {
+    const toggleManual = (name: Facility) => {
+      setManualSelection((prev) => {
+        if (prev.includes(name)) {
+          return prev.filter((n) => n !== name);
+        } else if (prev.length < selectedCount) {
+          return [...prev, name];
+        } else {
+          return prev;
+        }
+      });
+    };
 
-              <div className="bg-white rounded-2xl shadow p-4">
-                <label className="block text-sm font-medium mb-2">
-                  持ち時間（秒）
-                </label>
-                <select
-                  className="w-full rounded-xl border px-3 py-3 text-lg"
-                  value={timePerTurn}
-                  onChange={(e) => setTimePerTurn(Number(e.target.value))}
-                >
-                  {[5, 6, 7, 8, 9, 10, 15, 20, 25, 30].map((s) => (
-                    <option key={s} value={s}>
-                      {s} 秒
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
+    const resetToInitial = () => {
+      setInitialized(false);
+      setMarket([]);
+      setPool([]);
+      setExhausted([]);
+      setManualSelection([]);
+      setLastAdded(null);
+      historyRef.current = [];
+    };
 
-            <div className="flex items-center gap-4 justify-center">
-              <button
-                id="startButton"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  startGame();
-                }}
-                className="px-8 py-5 text-xl rounded-2xl shadow bg-emerald-600 text-white w-full sm:w-auto"
+    return (
+      <div className="space-y-4">
+        {!initialized && (
+          <div className="flex gap-2 items-end flex-wrap">
+            <div>
+              <label>選択施設数</label>
+              <select
+                value={selectedCount}
+                onChange={(e) => setSelectedCount(Number(e.target.value))}
+                className="border rounded p-1"
               >
-                Start
-              </button>
+                {[...Array(11)].map((_, i) => {
+                  const v = 5 + i;
+                  return (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  );
+                })}
+              </select>
             </div>
-          </>
-        )}
-
-        {started && (
-          <div className="flex items-center gap-4 justify-center mb-4">
+            <div>
+              <label>モード</label>
+              <select
+                value={mode}
+                onChange={(e) => setMode(e.target.value as "random" | "manual")}
+                className="border rounded p-1"
+              >
+                <option value="random">ランダム</option>
+                <option value="manual">手動選択</option>
+              </select>
+            </div>
             <button
-              id="resetButton"
-              onPointerDown={onResetDown}
-              onPointerUp={onResetUp}
-              onClick={(e) => e.stopPropagation()}
-              className="px-8 py-5 text-xl rounded-2xl shadow bg-slate-200 text-slate-800 w-full sm:w-auto"
+              onClick={() => initMarket(selectedCount)}
+              className="px-3 py-2 rounded bg-slate-200"
             >
-              Reset
+              Start
             </button>
           </div>
         )}
 
-        <div className="bg-white rounded-2xl shadow p-4 mb-4">
-          <div className="flex flex-col items-center">
-            {Array.from({ length: numPlayers }).map((_, i) => (
-              <input
-                key={i}
-                type="text"
-                className={`text-lg font-bold mb-2 text-center border rounded-lg px-3 py-2 ${
-                  i === currentPlayer && started && !gameOver
-                    ? "bg-emerald-100"
-                    : "bg-slate-100"
-                } ${started ? "pointer-events-none" : ""}`}
-                value={playerNames[i]}
-                onChange={(e) => {
-                  const newNames = [...playerNames];
-                  newNames[i] = e.target.value;
-                  setPlayerNames(newNames);
-                }}
-                disabled={started}
-              />
-            ))}
+        {initialized && (
+          <div className="flex gap-2 items-end flex-wrap">
+            <button
+              onClick={resetToInitial}
+              className="px-3 py-2 rounded bg-slate-200"
+            >
+              Reset
+            </button>
+            <button
+              onClick={restorePrevious}
+              className="px-3 py-2 rounded bg-slate-200"
+            >
+              戻す
+            </button>
           </div>
-          <div className="text-center mt-2 text-2xl font-bold">
-            {started && !gameOver
-              ? `${playerNames[currentPlayer]} の番`
-              : "待機中"}
-          </div>
-        </div>
+        )}
 
-        <div className="bg-white rounded-2xl shadow p-6 mb-4 text-center">
-          {gameOver ? (
-            <div className="text-4xl font-black text-rose-600">Game over</div>
-          ) : started ? (
-            <div className="text-6xl font-black tabular-nums">
-              {remainingSec}
-              <span className="text-2xl ml-1">s</span>
+        {message && <div className="text-red-500">{message}</div>}
+
+        {!initialized && mode === "manual" && (
+          <div>
+            <h3>
+              手動選択パネル ({manualSelection.length}/{selectedCount})
+            </h3>
+            <div className="flex flex-wrap gap-1">
+              {allFacilities.map((f) => (
+                <button
+                  key={f}
+                  onClick={() => toggleManual(f)}
+                  className={`px-2 py-1 border rounded text-xs ${
+                    manualSelection.includes(f) ? "bg-blue-200" : ""
+                  }`}
+                >
+                  {f}
+                </button>
+              ))}
             </div>
-          ) : (
-            <div className="text-slate-400">Startを押すと開始します</div>
-          )}
-        </div>
+          </div>
+        )}
+
+        {initialized && (
+          <>
+            <div>
+              <h3>選択中の施設</h3>
+              <p className="text-xs text-slate-500 mb-2">
+                ※
+                カード名をクリックすると補充します（消えた施設は再利用しません）。
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2">
+                {market.map((name, idx) => (
+                  <button
+                    key={name}
+                    onClick={() => replaceOne(idx)}
+                    className={`p-3 border rounded text-sm text-left ${
+                      name === lastAdded ? "bg-amber-100 border-amber-300" : ""
+                    }`}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h3>残りの施設</h3>
+              <div className="flex flex-wrap gap-1">
+                {pool.map((p) => (
+                  <span key={p} className="px-2 py-1 border rounded text-xs">
+                    {p}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
       </div>
+    );
+  };
+
+  return (
+    <div className="p-4">
+      <header className="flex justify-between mb-4">
+        <h1>街コロ｜サプライ施設選択アプリ</h1>
+        <nav className="flex gap-2">
+          <a href="#/" className={route === "/" ? "font-bold" : ""}>
+            メイン
+          </a>
+          <a href="#/manage" className={route === "/manage" ? "font-bold" : ""}>
+            施設登録
+          </a>
+        </nav>
+      </header>
+      {route === "/" ? <PlayView /> : <ManageView />}
     </div>
   );
 }
